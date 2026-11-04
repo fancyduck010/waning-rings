@@ -204,6 +204,35 @@ CREATE TABLE persona_versions (
     decided_at INTEGER
   );
 
+CREATE TABLE pulls (
+    id         TEXT PRIMARY KEY,
+    collab_id  TEXT NOT NULL,
+    day        TEXT NOT NULL,
+    sides      TEXT NOT NULL,
+    chose      TEXT NOT NULL,
+    why        TEXT NOT NULL DEFAULT '',
+    said       TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL
+  );
+
+CREATE TABLE stances (
+    id          TEXT PRIMARY KEY,
+    collab_id   TEXT NOT NULL,
+    label       TEXT NOT NULL,
+    obs         TEXT NOT NULL,
+    status      TEXT NOT NULL DEFAULT 'pending',
+    pull_ids    TEXT NOT NULL DEFAULT '[]',
+    first_day   TEXT NOT NULL,
+    last_day    TEXT NOT NULL,
+    his_note    TEXT NOT NULL DEFAULT '',
+    history     TEXT NOT NULL DEFAULT '[]',
+    struck_why  TEXT NOT NULL DEFAULT '',
+    struck_at   INTEGER,
+    told        INTEGER NOT NULL DEFAULT 1,
+    reviewed_at INTEGER,
+    created_at  INTEGER NOT NULL
+  );
+
 CREATE INDEX idx_conversations_collab ON conversations(collaborator_id, updated_at);
 
 CREATE UNIQUE INDEX idx_messages_seq ON messages(conv_id, seq);
@@ -225,3 +254,7 @@ CREATE INDEX idx_moments_collab ON moments(collab_id, day);
 CREATE INDEX idx_traits_collab ON traits(collab_id, status);
 
 CREATE INDEX idx_persona_collab ON persona_versions(collab_id, created_at);
+
+CREATE INDEX idx_pulls_collab ON pulls(collab_id, day);
+
+CREATE INDEX idx_stances_collab ON stances(collab_id, status);

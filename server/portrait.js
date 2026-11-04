@@ -6,6 +6,7 @@ import { db, newId, getSetting, setSetting, listCollaborators } from './db.js';
 import { complete, route, listMemories, listViews } from './memory.js';
 import * as moments from './moments.js';
 import * as persona from './persona.js';
+import * as stances from './stances.js';
 
 const DAY = 86400_000;
 const MAX = 15;
@@ -143,8 +144,11 @@ function coreGroups(collab) {
   const mems = listMemories(collab.id), user = collab.user_name || '她';
   const firsts = mems.filter(m => m.kind === 'first').sort((a, b) => a.day.localeCompare(b.day)).map(m => [m.day.slice(5), m.content]);
   const facts = mems.filter(m => m.kind !== 'first');
-  const self = facts.filter(m => new RegExp(`^${collab.name}|${collab.name}(自己|的自我|的固定|的生日)`).test(m.content));
-  const her = facts.filter(m => !self.includes(m) && new RegExp(`^${user}(出生|是|为|允许|明确)|${user}的`).test(m.content));
+  // the kind he chose; a memory not sorted yet is guessed from its words until the helper sorts it
+  const guessSelf = m => new RegExp(`^${collab.name}|${collab.name}(自己|的自我|的固定|的生日)`).test(m.content);
+  const guessHer = m => new RegExp(`^${user}(出生|是|为|允许|明确)|${user}的`).test(m.content);
+  const self = facts.filter(m => m.kind === 'self' || (m.kind === 'fact' && guessSelf(m)));
+  const her = facts.filter(m => m.kind === 'her' || (m.kind === 'fact' && !guessSelf(m) && guessHer(m)));
   const rules = facts.filter(m => !self.includes(m) && !her.includes(m));
   const views = heldViewsByRecent(collab.id).slice(0, VIEWS_IN_CORE).map(v => ['', v.text]);
   return [
@@ -167,6 +171,7 @@ export function data(collab) {
   return {
     name: collab.name,
     persona: persona.data(collab),
+    stances: stances.data(collab),
     core: coreGroups(collab),
     // held views beyond the newest twelve: still his, drifting outward
     olderViews: heldViewsByRecent(collab.id).slice(VIEWS_IN_CORE).map(v => ({ text: v.text, at: v.reviewed_at || v.created_at })),

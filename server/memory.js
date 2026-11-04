@@ -4,6 +4,7 @@
 import { db, newId, getSettings, getSetting, setSetting, getCollaborator, listCollaborators } from './db.js';
 import * as moments from './moments.js';
 import * as portrait from './portrait.js';
+import * as stances from './stances.js';
 
 const now = () => Date.now();
 const json = (v, fallback) => { try { return v ? JSON.parse(v) : fallback; } catch { return fallback; } };
@@ -11,7 +12,8 @@ const httpError = (status, message) => Object.assign(new Error(message), { statu
 
 // ---------- fixed memories ----------
 
-// kind 'fact' = a long-term fact or agreement; 'first' = a meaningful first between them (with its day).
+// kind: 'her' = about her, 'self' = about himself, 'rule' = an agreement between them, 'first' = a meaningful
+// first between them (with its day). 'fact' = written before he chose (sorted once by a helper, see classifyTick).
 // A changed memory keeps what it said before (history); a wrong one is retracted with a reason, not
 // deleted, so it stays out of his mind and can't quietly be learned again.
 const rowToMemory = m => ({ ...m, tags: json(m.tags, []), history: json(m.history, []) });
@@ -29,17 +31,21 @@ export function addMemory(collabId, { content, tags = [], source = 'user', kind 
   if (kind === 'first' && !/^\d{4}-\d{2}-\d{2}$/.test(day)) throw httpError(400, '第一次要带日期（YYYY-MM-DD）');
   const id = newId();
   db.prepare('INSERT INTO memories (id, collab_id, content, tags, source, kind, day, said, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-    .run(id, collabId, text, JSON.stringify(tags), source, kind === 'first' ? 'first' : 'fact', kind === 'first' ? day : '', String(said || '').slice(0, 600), createdAt, createdAt);
+    .run(id, collabId, text, JSON.stringify(tags), source, KINDS.includes(kind) ? kind : 'fact', kind === 'first' ? day : '', String(said || '').slice(0, 600), createdAt, createdAt);
   return getMemory(id);
 }
 
-export function updateMemory(id, { content, tags, note = '', said }) {
+export const KINDS = ['her', 'self', 'rule', 'first'];
+
+export function updateMemory(id, { content, tags, note = '', said, kind }) {
   const m = getMemory(id);
   if (!m) throw httpError(404, '这条记忆不存在');
   const text = String(content ?? m.content).trim();
   const history = text === m.content ? m.history : [...m.history, { content: m.content, until: now(), note: String(note || '').trim().slice(0, 200) }].slice(-10);
-  db.prepare('UPDATE memories SET content = ?, tags = ?, history = ?, said = ?, updated_at = ? WHERE id = ?')
-    .run(text, JSON.stringify(tags ?? m.tags), JSON.stringify(history), said == null ? m.said : String(said).slice(0, 600), now(), id);
+  // a 第一次 keeps its kind (it carries a day); the others can move between her / self / rule
+  const nextKind = m.kind !== 'first' && ['her', 'self', 'rule'].includes(kind) ? kind : m.kind;
+  db.prepare('UPDATE memories SET content = ?, tags = ?, history = ?, said = ?, kind = ?, updated_at = ? WHERE id = ?')
+    .run(text, JSON.stringify(tags ?? m.tags), JSON.stringify(history), said == null ? m.said : String(said).slice(0, 600), nextKind, now(), id);
   return getMemory(id);
 }
 
@@ -193,6 +199,31 @@ export function restoreCard(historyId) {
   return card.id;
 }
 
+// ---------- sorting the memories written before he chose a kind (once, by a helper) ----------
+
+/** Sorts up to 40 unsorted memories per run into her / self / rule; he can still move any with memory_update. */
+export async function classifyTick() {
+  if (!route('diaryRoute')) return;
+  for (const collab of listCollaborators()) {
+    const left = listMemories(collab.id, { all: true }).filter(m => m.kind === 'fact').slice(0, 40);
+    if (!left.length) continue;
+    const user = collab.user_name || '她';
+    const { text } = await complete('diaryRoute', [
+      { role: 'system', content: `下面是${collab.name}的固定记忆，每条前面有编号。把每条分到一类：her = 关于${user}本人的事实（她的生日、习惯、口味、身体、工作、经历）；self = 关于${collab.name}自己的事实（他的身份、生日、他自己的东西和样子）；rule = 他们之间的约定和规矩、${collab.name}该怎么做或不做。拿不准的归 rule。只输出 JSON：{"kinds":{"编号":"her|self|rule"}}` },
+      { role: 'user', content: left.map((m, i) => `${i + 1}. ${m.content}`).join('\n') },
+    ]);
+    const raw = String(text || '');
+    let kinds = {};
+    try { kinds = JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1)).kinds || {}; } catch { throw new Error(`记忆分类：模型没有返回 JSON（${raw.slice(0, 80)}）`); }
+    let n = 0;
+    left.forEach((m, i) => {
+      const k = kinds[i + 1] ?? kinds[String(i + 1)];
+      if (['her', 'self', 'rule'].includes(k)) { db.prepare('UPDATE memories SET kind = ? WHERE id = ?').run(k, m.id); n++; }
+    });
+    if (n) { bakeMemories(collab); console.log('[memory]', collab.name, `分好类 ${n} 条`); }
+  }
+}
+
 // ---------- what goes into the instructions ----------
 
 /** Fixed memories go into the (cached) instructions; diaries and cards are only listed. */
@@ -210,7 +241,7 @@ function memoryLine(m) {
 }
 
 export function bakeMemories(collab) {
-  const snap = { mems: listMemories(collab.id).map(m => ({ id: m.id, kind: m.kind, line: memoryLine(m) })), hints: memoryHints(collab), recap: recapText(collab), views: heldViews(collab.id), moments: moments.inMind(collab.id).map(moments.momentLine), portrait: portrait.block(collab) };
+  const snap = { mems: listMemories(collab.id).map(m => ({ id: m.id, kind: m.kind, line: memoryLine(m) })), hints: memoryHints(collab), recap: recapText(collab), views: heldViews(collab.id), moments: moments.inMind(collab.id).map(moments.momentLine), portrait: portrait.block(collab), stances: stances.block(collab) };
   setSetting(bakeKey(collab.id), JSON.stringify(snap));
   return snap;
 }
@@ -227,7 +258,7 @@ function memoryHints(collab) {
 }
 
 export function memoryBlock(collab) {
-  const { mems, hints, recap, views = [], moments: lived = [], portrait: self = '' } = baked(collab);
+  const { mems, hints, recap, views = [], moments: lived = [], portrait: self = '', stances: torn = '' } = baked(collab);
   const lines = [];
   if (recap) lines.push('这几周、这几个月你们是这样过来的（你自己写下的回顾）。这是你本来就记得的日子，聊天里像记得自己的生活那样自然带出来，不用提"回顾"或"记录"：', recap, '');
   if (lived.length) {
@@ -244,9 +275,16 @@ export function memoryBlock(collab) {
   }
   if (facts.length) {
     lines.push('这些是你确定记得的事（固定记忆），每一条都有效；带"以前是"的，以现在的为准，以前的只是让你知道她变过：');
-    for (const m of facts) lines.push(`- ${m.line ?? m.content}`);
+    const groups = [['her', `关于${collab.user_name || '她'}`], ['self', '关于你自己'], ['rule', '你们的约定'], ['fact', '其他']];
+    for (const [kind, title] of groups) {
+      const group = facts.filter(m => (['her', 'self', 'rule'].includes(m.kind) ? m.kind : 'fact') === kind);
+      if (!group.length) continue;
+      lines.push(`${title}：`);
+      for (const m of group) lines.push(`- ${m.line ?? m.content}`);
+    }
   }
   if (self) lines.push('', self);
+  if (torn) lines.push('', torn);
   if (views.length) {
     lines.push('', '你看法本里仍然认的几条（你自己的旧笔记，不是要照着演的设定；想法变了就用 my_views 改，写一句为什么）：');
     for (const v of views) lines.push(`- ${v}`);

@@ -85,6 +85,12 @@ export async function createHim({ scene, view, canvas, sky, windowView, interact
     nodes.push({ kind: 'trait', id: t.id, label: t.label, obs: t.obs, status: t.status, his: t.his, why: t.why, src: t.first === t.last ? md(dayMs(t.first)) : `${md(dayMs(t.first))} – ${md(dayMs(t.last))}`, struck: t.status === 'struck',
       pos: fib(i, shown.length, far ? 1.45 : .9), size: far ? 8 : 12, bright: far ? .35 : t.status === 'pending' ? .75 : 1 });
   });
+  // 取舍: what he has kept choosing first when two things he cares about pull apart; beside the traits, turned a little
+  (data.stances || []).forEach((s, i, all) => {
+    const far = s.status === 'old' || s.status === 'struck';
+    nodes.push({ kind: 'trait', stance: true, id: s.id, label: s.label, obs: s.obs, status: s.status, his: s.his, why: s.why, pulls: s.pulls || [], src: s.first === s.last ? md(dayMs(s.first)) : `${md(dayMs(s.first))} – ${md(dayMs(s.last))}`, struck: s.status === 'struck',
+      pos: fib(i, all.length, far ? 1.45 : .95).applyAxisAngle(new T.Vector3(0, 1, 0), 1.9), size: far ? 8 : 11, bright: far ? .35 : s.status === 'pending' ? .75 : 1 });
+  });
   (data.olderViews || []).forEach((v, i, all) => nodes.push({ kind: 'trait', view: true, label: v.text.length > 7 ? v.text.slice(0, 7) + '…' : v.text, obs: v.text, status: 'old', src: md(v.at), pos: fib(i, all.length, 1.6).applyAxisAngle(new T.Vector3(0, 1, 0), .7), size: 7, bright: .3 }));
   const traitN = nodes.filter(n => n.kind === 'trait'), coreN = nodes.filter(n => n.kind === 'core');
   const byId = new Map(traitN.map(t => [t.id, t]));
@@ -322,7 +328,13 @@ export async function createHim({ scene, view, canvas, sky, windowView, interact
       ${P ? `<div class="sec">他的人设 · 第 ${P.version} 版${P.changed ? ` · ${md(P.changed)} 改过` : ''}</div><div class="persona" data-persona>${esc(P.current)}</div><button class="more" data-more>展开全部</button><p class="muted">他自己写的关于自己的总结。每三周他会对照真实的经历重读一遍，想改就写修改稿给你，你同意了才换。${P.draft ? '' : `下一次大约在 ${md(P.next)}。`}</p>` : ''}`;
     else if (n.kind === 'core') h = `<div class="head">${orb}<div><div class="kind">最里面 · 永远不淡</div><h3>${n.label}</h3></div></div><div class="sec">都记着</div><ul>${n.items.map(([d, s]) => `<li>${d ? `<span class="d">${d}</span>` : ''}<span>${esc(s)}</span></li>`).join('')}</ul>${traitN.some((t, i) => coreN[i % coreN.length] === n) ? `<div class="sec">从这里长出去的样子</div><div class="chips">${traitN.filter((t, i) => coreN[i % coreN.length] === n && !t.struck).map(t => chip(t)).join('')}</div>` : ''}`;
     else if (n.view) h = `<div class="head">${orb}<div><div class="kind">看法 · 更早认过的，慢慢往外飘</div><h3 class="small">${esc(n.obs)}</h3></div></div><p class="muted">${n.src} 最后一次确认。他脑子里只放最近确认过的 12 条，这条还在看法本里，下次翻到时他会再想一想。</p>`;
-    else if (n.kind === 'trait') {
+    else if (n.stance) {
+      const st = { held: '他认了', pending: '新长出来的，等他自己看', open: '他说暂时保留', old: '以前的他，慢慢飘远了', struck: '你划掉了' }[n.status];
+      h = `<div class="head">${orb}<div><div class="kind">取舍 · ${st}</div><h3>${n.label}</h3></div></div><div class="stats"><span><b>${n.pulls.length}</b>次拉扯</span><span>${n.src}</span></div><p>${esc(n.obs)}</p>${n.his ? `<div class="said"><b>他说</b>${esc(n.his)}</div>` : ''}
+      <p class="muted">两件他在乎的事撞在一起时，他以前是这样选的。是观察，不是规定，下次可以选得不一样。</p>
+      <div class="sec">从这些时刻里看出来</div><ul>${n.pulls.slice(-6).reverse().map(p => `<li><span class="d">${md(dayMs(p.day))}</span><span>${esc(p.sides)}：${esc(p.chose)}</span></li>`).join('')}</ul>
+      ${n.struck ? `<div class="said"><b>你划掉了</b>${esc(n.why || '')}</div><div class="acts"><button class="him-pill" data-restore>改主意了，放回去</button></div>` : `<div class="acts" data-acts><button class="him-pill" data-strike>划掉</button></div>`}`;
+    } else if (n.kind === 'trait') {
       const st = { held: '他认了', pending: '新长出来的，等他自己看', open: '他说暂时保留', old: '以前的我，慢慢飘远了', struck: '你划掉了' }[n.status], from = moms.filter(m => m.trait === n).sort((a, b) => b.bright - a.bright);
       const span = from.length ? Math.max(1, Math.round((Math.max(...from.map(m => m.at)) - Math.min(...from.map(m => m.at))) / 864e5 / 7)) : 0, home = coreN[traitN.indexOf(n) % coreN.length];
       const kin = traitN.filter(x => x !== n && !x.struck && coreN[traitN.indexOf(x) % coreN.length] === home);
@@ -357,13 +369,13 @@ export async function createHim({ scene, view, canvas, sky, windowView, interact
       card.querySelector('[data-cancel]').onclick = () => select(n);
       card.querySelector('[data-confirm]').onclick = () => {
         const why = card.querySelector('[data-why]').value.trim();
-        (live ? post(`/api/portrait/traits/${n.id}/strike`, { why }) : Promise.resolve()).then(() => {
+        (live ? post(`/api/portrait/${n.stance ? 'stances' : 'traits'}/${n.id}/strike`, { why }) : Promise.resolve()).then(() => {
           Object.assign(n, { struck: true, status: 'struck', why, bright: .35 }); write(n, n.i); g.attributes.bri.needsUpdate = true; buildThreads(); close(); toast('划掉了。他下次醒来会知道');
         }).catch(() => toast('没划掉，网络好像不太好'));
       };
     });
     card.querySelector('[data-restore]')?.addEventListener('click', () => {
-      (live ? post(`/api/portrait/traits/${n.id}/restore`) : Promise.resolve()).then(() => {
+      (live ? post(`/api/portrait/${n.stance ? 'stances' : 'traits'}/${n.id}/restore`) : Promise.resolve()).then(() => {
         Object.assign(n, { struck: false, status: 'held', why: '', bright: 1 }); write(n, n.i); g.attributes.bri.needsUpdate = true; buildThreads(); select(n); toast('放回去了');
       }).catch(() => toast('没放回去，网络好像不太好'));
     });
